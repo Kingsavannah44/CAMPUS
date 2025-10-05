@@ -1,0 +1,1 @@
+const uri = `mongodb+srv://shadsbrian_db_user:${process.env.DB_PASSWORD}@cluster0.hkxf6ki.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;

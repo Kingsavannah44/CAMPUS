@@ -1,0 +1,13 @@
+{
+  "name": "campus-election-frontend",
+  "version": "1.0.0",
+  "description": "Campus Election System Frontend",
+  "main": "index.html",
+  "scripts": {
+    "build": "echo 'Static site - no build needed'",
+    "start": "python -m http.server 3000"
+  },
+  "keywords": ["election", "campus", "voting"],
+  "author": "Campus Election Team",
+  "license": "MIT"
+}

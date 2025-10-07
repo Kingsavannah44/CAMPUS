@@ -6,6 +6,11 @@ const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const multer = require('multer');
+const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const validator = require('validator');
+const xss = require('xss');
 
 // Import route modules
 const voteRoutes = require('./Src/routes/votes');
@@ -16,25 +21,68 @@ dotenv.config();
 // --- Configuration ---
 const app = express();
 const PORT = process.env.PORT || 5000;
-const upload = multer({ dest: 'uploads/' });
+
+// Secure file upload configuration
+const upload = multer({ 
+    dest: 'uploads/',
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files allowed'), false);
+        }
+    }
+});
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
+});
+
+// Input sanitization function
+function sanitizeInput(input) {
+    if (typeof input === 'string') {
+        return xss(input.trim());
+    }
+    return input;
+}
 
 // IMPORTANT: Replace this placeholder with your actual MongoDB Atlas connection string!
 // It should look like: mongodb+srv://<USER>:<PASS>@<CLUSTER_URL>/<DATABASE_NAME>?retryWrites=true&w=majority
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/CampusElectionsDB";
 
 // --- Middleware ---
+// Security headers
+app.use(helmet());
+
+// Rate limiting
+app.use(limiter);
+
 // Enable CORS for frontend applications to connect (essential for web apps)
 app.use(cors({
   origin: function (origin, callback) {
     // allow requests with no origin, like mobile apps or curl requests
     if (!origin) return callback(null, true);
-    if (origin.startsWith('http://localhost:')) return callback(null, true);
-    return callback(new Error('Not allowed by CORS'));
+    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return callback(null, true);
+    return callback(null, true);
   },
   credentials: true
 }));
+
 // Parse incoming JSON requests (req.body will be available)
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Serve static files securely
+app.use('/uploads', express.static('uploads', {
+    setHeaders: (res, path) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+}));
 
 // --- Import Models ---
 const User = require('./Src/models/user');
@@ -93,13 +141,42 @@ const requireAdmin = (req, res, next) => {
 // --- Auth Routes ---
 
 // Register
-app.post('/auth/register', async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
     try {
-        console.log('Register request body:', req.body);
-        const { email, password, name, role } = req.body;
+        const { email, password, name, role, institution } = req.body;
+
+        // Input validation
+        if (!email || !password || !name) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email, password, and name are required'
+            });
+        }
+
+        if (!validator.isEmail(email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid email format'
+            });
+        }
+
+        if (password.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be at least 6 characters'
+            });
+        }
+
+        // Sanitize inputs
+        const sanitizedData = {
+            email: sanitizeInput(email.toLowerCase()),
+            name: sanitizeInput(name),
+            role: sanitizeInput(role) || 'voter',
+            institution: institution ? sanitizeInput(institution) : null
+        };
 
         // Check if user exists
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ email: sanitizedData.email });
         if (existingUser) {
             return res.status(400).json({
                 success: false,
@@ -111,13 +188,19 @@ app.post('/auth/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 12);
 
         // Create user
-        const user = new User({
-            email,
+        const userData = {
+            email: sanitizedData.email,
             password: hashedPassword,
-            name,
-            role: role || 'voter'
-        });
+            name: sanitizedData.name,
+            role: sanitizedData.role
+        };
+        
+        // Add institution for voters
+        if (sanitizedData.role === 'voter' && sanitizedData.institution) {
+            userData.institution = sanitizedData.institution;
+        }
 
+        const user = new User(userData);
         await user.save();
 
         // Generate token
@@ -134,7 +217,8 @@ app.post('/auth/register', async (req, res) => {
                     id: user._id,
                     email: user.email,
                     name: user.name,
-                    role: user.role
+                    role: user.role,
+                    institution: user.institution
                 },
                 token
             },
@@ -149,12 +233,27 @@ app.post('/auth/register', async (req, res) => {
 });
 
 // Login
-app.post('/auth/login', async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        // Input validation
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email and password are required'
+            });
+        }
+
+        if (!validator.isEmail(email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid email format'
+            });
+        }
+
         // Find user
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ email: sanitizeInput(email.toLowerCase()) });
         if (!user) {
             return res.status(400).json({
                 success: false,
@@ -200,7 +299,7 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // Get current user
-app.get('/auth/me', async (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
     try {
         const token = req.headers.authorization?.split(' ')[1];
         if (!token) {
@@ -241,13 +340,22 @@ app.get('/', (req, res) => {
 
 // POST route: /api/candidates
 // Creates a new candidate document in the database
-app.post('/api/candidates', upload.single('photo'), async (req, res) => {
+app.post('/api/candidates', authenticateToken, requireAdmin, upload.single('photo'), async (req, res) => {
     try {
+        // Input validation
+        if (!req.body.name || !req.body.position) {
+            return res.status(400).json({
+                success: false,
+                message: 'Name and position are required'
+            });
+        }
+
         const candidateData = {
-            name: req.body.name,
-            manifesto: req.body.manifesto,
-            bio: req.body.bio,
-            position: req.body.positionId,
+            name: sanitizeInput(req.body.name),
+            manifesto: sanitizeInput(req.body.manifesto),
+            bio: sanitizeInput(req.body.bio),
+            position: sanitizeInput(req.body.position),
+            election: req.body.election,
             user: req.body.userId,
             photo: req.file ? req.file.filename : null
         };
@@ -299,6 +407,15 @@ app.get('/api/candidates', async (req, res) => {
 app.get('/api/candidates/election/:electionId', async (req, res) => {
     try {
         const { electionId } = req.params;
+        
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(electionId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid election ID'
+            });
+        }
+        
         const candidates = await Candidate.find({ election: electionId }).populate('position');
 
         res.status(200).json(candidates);
@@ -310,10 +427,104 @@ app.get('/api/candidates/election/:electionId', async (req, res) => {
     }
 });
 
-// --- Elections Routes are handled by Src/routes/elections.js ---
+// --- Elections Routes ---
+app.get('/api/elections', async (req, res) => {
+    try {
+        const elections = await Election.find({});
+        res.json({ success: true, data: elections });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+app.post('/api/elections', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        // Input validation
+        if (!req.body.name || !req.body.startDate || !req.body.endDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'Name, start date, and end date are required'
+            });
+        }
+
+        const electionData = {
+            name: sanitizeInput(req.body.name),
+            description: sanitizeInput(req.body.description),
+            startDate: req.body.startDate,
+            endDate: req.body.endDate
+        };
+
+        const election = new Election(electionData);
+        await election.save();
+        res.status(201).json({ success: true, data: election });
+    } catch (error) {
+        res.status(400).json({ success: false, message: 'Error creating election' });
+    }
+});
+
+app.get('/api/elections/:id', async (req, res) => {
+    try {
+        const election = await Election.findById(req.params.id);
+        if (!election) {
+            return res.status(404).json({ success: false, message: 'Election not found' });
+        }
+        res.json({ success: true, data: election });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+app.put('/api/elections/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const election = await Election.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        if (!election) {
+            return res.status(404).json({ success: false, message: 'Election not found' });
+        }
+        res.json({ success: true, data: election });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+});
+
+app.delete('/api/candidates/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const candidate = await Candidate.findByIdAndDelete(req.params.id);
+        if (!candidate) {
+            return res.status(404).json({ success: false, message: 'Candidate not found' });
+        }
+        res.json({ success: true, message: 'Candidate deleted' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 
 // --- Vote Routes ---
 app.use('/api/votes', voteRoutes);
+
+// --- Contact Form Route ---
+app.post('/api/contact', async (req, res) => {
+    try {
+        const { name, email, topic, message } = req.body;
+        
+        // Log the message (for now)
+        console.log('Contact Form Message:');
+        console.log(`Name: ${name}`);
+        console.log(`Email: ${email}`);
+        console.log(`Topic: ${topic}`);
+        console.log(`Message: ${message}`);
+        
+        res.json({
+            success: true,
+            message: 'Message received successfully'
+        });
+    } catch (error) {
+        console.error('Contact error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to send message'
+        });
+    }
+});
 
 // Import the main app from app.js
 const mainApp = require('./Src/app');

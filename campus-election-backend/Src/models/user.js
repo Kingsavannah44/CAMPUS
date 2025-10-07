@@ -7,7 +7,8 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'voter'], default: 'voter' },
   matricNo: { type: String },
   faculty: { type: String },
-  isAdmin: { type: Boolean, default: false }
+  isAdmin: { type: Boolean, default: false },
+  institution: { type: String }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

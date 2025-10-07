@@ -3,6 +3,17 @@ const router = express.Router();
 const { authenticateToken, requireAdmin, requireVoter } = require('../middlewares/auth');
 const Vote = require('../models/vote');
 const Candidate = require('../models/candidate');
+const mongoose = require('mongoose');
+const validator = require('validator');
+const xss = require('xss');
+
+// Input sanitization function
+function sanitizeInput(input) {
+    if (typeof input === 'string') {
+        return xss(input.trim());
+    }
+    return input;
+}
 
 // Get all votes (admin only)
 router.get('/', authenticateToken, requireAdmin, async (req, res) => {
@@ -26,12 +37,27 @@ router.get('/', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Cast a vote (voter only)
-router.post('/', authenticateToken, requireVoter, async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
     try {
-        const { candidate, election } = req.body;
+        const { candidateName, position, electionId } = req.body;
 
-        // Find the candidate to get the position
-        const candidateDoc = await Candidate.findById(candidate);
+        // Input validation
+        if (!candidateName || !position) {
+            return res.status(400).json({
+                success: false,
+                message: 'Candidate name and position are required'
+            });
+        }
+
+        // Sanitize inputs
+        const sanitizedCandidateName = sanitizeInput(candidateName);
+        const sanitizedPosition = sanitizeInput(position);
+
+        // Find the candidate
+        const candidateDoc = await Candidate.findOne({ 
+            name: sanitizedCandidateName,
+            position: sanitizedPosition
+        });
         if (!candidateDoc) {
             return res.status(404).json({
                 success: false,
@@ -39,35 +65,28 @@ router.post('/', authenticateToken, requireVoter, async (req, res) => {
             });
         }
 
-        const candidateId = candidate;
-        const electionId = election;
-        const positionId = candidateDoc.position;
-
         // Check if user has already voted for this position in this election
         const existingVote = await Vote.findOne({
             voter: req.user.id,
-            election: electionId,
-            position: positionId
+            candidateName: sanitizedCandidateName,
+            position: sanitizedPosition
         });
 
         if (existingVote) {
             return res.status(400).json({
                 success: false,
-                message: 'You have already voted for this position in this election'
+                message: 'You have already voted for this position'
             });
         }
 
         const vote = new Vote({
             voter: req.user.id,
-            candidate: candidateId,
-            election: electionId,
-            position: positionId
+            candidateName: sanitizedCandidateName,
+            position: sanitizedPosition,
+            electionId: electionId || 'default'
         });
 
         await vote.save();
-        await vote.populate('candidate');
-        await vote.populate('election');
-        await vote.populate('position');
 
         res.status(201).json({
             success: true,
@@ -85,10 +104,7 @@ router.post('/', authenticateToken, requireVoter, async (req, res) => {
 // Get votes for a specific election
 router.get('/election/:electionId', authenticateToken, async (req, res) => {
     try {
-        const votes = await Vote.find({ election: req.params.electionId })
-            .populate('voter')
-            .populate('candidate')
-            .populate('position');
+        const votes = await Vote.find({ electionId: req.params.electionId });
             
         res.json({
             success: true,
@@ -103,11 +119,10 @@ router.get('/election/:electionId', authenticateToken, async (req, res) => {
 });
 
 // Get votes for a specific candidate
-router.get('/candidate/:candidateId', authenticateToken, async (req, res) => {
+router.get('/candidate/:candidateName', authenticateToken, async (req, res) => {
     try {
-        const votes = await Vote.find({ candidate: req.params.candidateId })
-            .populate('voter')
-            .populate('election');
+        const sanitizedName = sanitizeInput(req.params.candidateName);
+        const votes = await Vote.find({ candidateName: sanitizedName });
             
         res.json({
             success: true,
@@ -124,15 +139,15 @@ router.get('/candidate/:candidateId', authenticateToken, async (req, res) => {
 // Check vote status for an election
 router.get('/status', authenticateToken, async (req, res) => {
     try {
-        const { election } = req.query;
-        if (!election) {
+        const { electionId } = req.query;
+        if (!electionId) {
             return res.status(400).json({
                 success: false,
                 message: 'Election ID is required'
             });
         }
 
-        const votes = await Vote.find({ voter: req.user.id, election });
+        const votes = await Vote.find({ voter: req.user.id, electionId: sanitizeInput(electionId) });
         const hasVoted = votes.length > 0;
 
         res.json({
@@ -150,10 +165,7 @@ router.get('/status', authenticateToken, async (req, res) => {
 // Get user's votes
 router.get('/my-votes', authenticateToken, async (req, res) => {
     try {
-        const votes = await Vote.find({ voter: req.user.id })
-            .populate('candidate')
-            .populate('election')
-            .populate('position');
+        const votes = await Vote.find({ voter: req.user.id });
 
         res.json({
             success: true,
@@ -171,35 +183,20 @@ router.get('/my-votes', authenticateToken, async (req, res) => {
 router.get('/results/:electionId', authenticateToken, async (req, res) => {
     try {
         const results = await Vote.aggregate([
-            { $match: { election: req.params.electionId } },
+            { $match: { electionId: req.params.electionId } },
             {
                 $group: {
-                    _id: '$candidate',
+                    _id: {
+                        candidateName: '$candidateName',
+                        position: '$position'
+                    },
                     votes: { $sum: 1 }
                 }
             },
             {
-                $lookup: {
-                    from: 'candidates',
-                    localField: '_id',
-                    foreignField: '_id',
-                    as: 'candidate'
-                }
-            },
-            { $unwind: '$candidate' },
-            {
-                $lookup: {
-                    from: 'positions',
-                    localField: 'candidate.position',
-                    foreignField: '_id',
-                    as: 'position'
-                }
-            },
-            { $unwind: '$position' },
-            {
                 $project: {
-                    candidateName: '$candidate.name',
-                    positionName: '$position.name',
+                    candidateName: '$_id.candidateName',
+                    positionName: '$_id.position',
                     votes: 1
                 }
             },

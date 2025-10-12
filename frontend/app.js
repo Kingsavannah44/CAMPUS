@@ -933,14 +933,40 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('cancel-update-election')?.addEventListener('click', () => hideAdminForms());
     document.getElementById('cancel-delete-candidate')?.addEventListener('click', () => hideAdminForms());
     
-    // Contact form
+    // Initialize EmailJS
+    emailjs.init('tEeYLrGXlE5t7uGmE');
+    
+    // Contact form with real email sending
     const contactForm = document.querySelector('.contact-form');
     if (contactForm) {
-        contactForm.addEventListener('submit', (e) => {
+        contactForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const name = document.getElementById('contact-name').value;
-            alert(`Thank you ${name}! Your message has been received.`);
-            contactForm.reset();
+            
+            const submitBtn = contactForm.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Sending...';
+            submitBtn.disabled = true;
+            
+            const formData = {
+                from_name: document.getElementById('contact-name').value,
+                from_email: document.getElementById('contact-email').value,
+                subject: document.getElementById('contact-topic').value,
+                message: document.getElementById('contact-message').value
+            };
+            
+            try {
+                const response = await emailjs.send('service_9rzdcys', 'template_2l7a0nn', formData);
+                console.log('EmailJS Response:', response);
+                alert(`Thank you ${formData.from_name}! Your message has been sent successfully.`);
+                contactForm.reset();
+            } catch (error) {
+                console.error('Email sending failed:', error);
+                console.error('Error details:', error.text || error.message);
+                alert(`Error: ${error.text || error.message || 'Unknown error occurred'}`);
+            } finally {
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
+            }
         });
     }
     

@@ -311,7 +311,7 @@
                         <option value="voter">Voter</option>
                         <option value="admin">Admin</option>
                     </select>
-                    <input type="text" id="register-election" placeholder="Enter your institution name" required />
+                    <input type="text" id="register-election" placeholder="Enter your institution name (required for all users)" required />
                     <button type="submit">Register</button>
                 </form>
                 <p style="text-align: center; margin-top: 20px;">Already have an account? <a href="#" id="show-login">Login</a></p>
@@ -413,7 +413,7 @@
             <div class="section-container">
                 <header>
                     <button id="back-to-dashboard-results" class="header-back">← Back</button>
-                    <h1>Election Results</h1>
+                    <h1>Election Results <span style="font-size: 0.6em; color: #48bb78; animation: pulse 2s infinite;">● LIVE</span></h1>
                     <div class="header-buttons">
                         <button id="refresh-results" class="btn-secondary">🔄 Refresh</button>
                         <button id="home-btn-results" class="header-home">🏠 Home</button>
@@ -436,6 +436,7 @@
                     <button id="update-election-btn">✏️ Update Election</button>
                     <button id="delete-candidate-btn" class="btn-danger">🗑️ Delete Candidate</button>
                     <button id="view-all-votes" class="btn-secondary">👥 View All Votes</button>
+                    <button id="view-users-btn" class="btn-info">👤 View Users</button>
                 </div>
                 <div id="admin-forms" style="display: none;">
                     <!-- Create Election Form -->
@@ -444,8 +445,10 @@
                         <form id="election-form">
                             <input type="text" id="election-name" placeholder="Election Name" required />
                             <textarea id="election-description" placeholder="Election Description" required></textarea>
-                            <input type="date" id="election-start" required />
-                            <input type="date" id="election-end" required />
+                            <label>Start Date & Time:</label>
+                            <input type="datetime-local" id="election-start" required />
+                            <label>End Date & Time:</label>
+                            <input type="datetime-local" id="election-end" required />
                             <div style="display: flex; gap: 12px; margin-top: 16px;">
                                 <button type="submit" class="btn-success">Create Election</button>
                                 <button type="button" id="cancel-create-election" class="btn-secondary">Cancel</button>
@@ -462,8 +465,10 @@
                         <form id="update-form" style="display: none;">
                             <input type="text" id="update-election-name" placeholder="Election Name" required />
                             <textarea id="update-election-description" placeholder="Election Description" required></textarea>
-                            <input type="date" id="update-election-start" required />
-                            <input type="date" id="update-election-end" required />
+                            <label>Start Date & Time:</label>
+                            <input type="datetime-local" id="update-election-start" required />
+                            <label>End Date & Time:</label>
+                            <input type="datetime-local" id="update-election-end" required />
                             <div style="display: flex; gap: 12px; margin-top: 16px;">
                                 <button type="submit" class="btn-success">Update Election</button>
                                 <button type="button" id="cancel-update-election" class="btn-secondary">Cancel</button>
@@ -480,6 +485,15 @@
                         <div style="display: flex; gap: 12px; margin-top: 16px;">
                             <button type="button" id="confirm-delete-candidate" class="btn-danger">Delete Candidate</button>
                             <button type="button" id="cancel-delete-candidate" class="btn-secondary">Cancel</button>
+                        </div>
+                    </div>
+                    
+                    <!-- View Users Form -->
+                    <div id="view-users-form" style="display: none;">
+                        <h3>Users from Your Institution</h3>
+                        <div id="users-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; background: white;"></div>
+                        <div style="display: flex; gap: 12px; margin-top: 16px;">
+                            <button type="button" id="cancel-view-users" class="btn-secondary">Close</button>
                         </div>
                     </div>
                 </div>

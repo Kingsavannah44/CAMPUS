@@ -21,12 +21,15 @@ const homeSection = document.getElementById('home-section');
 let authToken = localStorage.getItem('token') || null;
 let currentUser = null;
 let currentElection = null;
-let demoCandidates = JSON.parse(localStorage.getItem('demoCandidates')) || [
-    { _id: '1', name: 'Alice Johnson', position: 'President', manifesto: 'Leading with integrity and innovation for student success' },
-    { _id: '2', name: 'Bob Smith', position: 'President', manifesto: 'Building bridges between students and administration' },
-    { _id: '3', name: 'Carol Davis', position: 'Vice President', manifesto: 'Empowering student voices in campus decisions' },
-    { _id: '4', name: 'David Wilson', position: 'Secretary', manifesto: 'Transparent communication and efficient organization' }
-];
+let demoElections = [];
+let demoCandidates = [];
+let demoUsers = [];
+let resultsInterval = null;
+
+// Clear existing data
+localStorage.removeItem('demoElections');
+localStorage.removeItem('demoCandidates');
+localStorage.removeItem('demoUsers');
 
 // Start voting function
 function startVoting() {
@@ -62,6 +65,11 @@ function showSection(section) {
     });
     section.classList.add('active');
     
+    // Stop real-time updates when leaving results section
+    if (section !== resultsSection) {
+        stopRealTimeResults();
+    }
+    
     const navbar = document.getElementById('navbar');
     if (section === homeSection) {
         navbar.style.display = 'block';
@@ -75,23 +83,26 @@ async function apiRequest(url, options = {}) {
     if (DEMO_MODE) {
         // Demo mode responses
         if (url.includes('/auth/register') || url.includes('/auth/login')) {
-            return { data: { token: 'demo-token', user: { name: 'Demo User', role: 'admin' } } };
+            return { data: { token: 'demo-token', user: { name: 'Demo User', role: 'admin', institution: 'Demo University' } } };
         }
         if (url.includes('/elections')) {
-            return { data: [{ _id: '1', name: 'Student Elections 2024', description: 'Demo election' }] };
+            const userElections = demoElections.filter(e => !currentUser || e.createdBy === currentUser.email || (currentUser.role === 'voter' && e.institution === currentUser.institution));
+            return { data: userElections };
         }
         if (url.includes('/candidates') && options.method === 'POST') {
             const candidateData = JSON.parse(options.body);
             const newCandidate = {
                 _id: Date.now().toString(),
-                ...candidateData
+                ...candidateData,
+                institution: currentUser?.institution || 'Demo University'
             };
             demoCandidates.push(newCandidate);
             localStorage.setItem('demoCandidates', JSON.stringify(demoCandidates));
             return { data: newCandidate };
         }
         if (url.includes('/candidates')) {
-            return { data: demoCandidates };
+            const userCandidates = demoCandidates.filter(c => !currentUser || c.institution === currentUser.institution);
+            return { data: userCandidates };
         }
         if (url.includes('/votes/results')) {
             return { data: [
@@ -141,10 +152,17 @@ async function login(email, password) {
     } catch (error) {
         // Demo mode fallback
         if (DEMO_MODE) {
-            alert('Demo Mode: Login successful!');
-            authToken = 'demo-token';
-            localStorage.setItem('token', authToken);
-            currentUser = { name: 'Demo User', email, role: 'voter' };
+            // Check if user exists in demo users
+            const existingUser = demoUsers.find(u => u.email === email);
+            if (existingUser) {
+                alert('Demo Mode: Login successful!');
+                authToken = 'demo-token';
+                localStorage.setItem('token', authToken);
+                currentUser = existingUser;
+            } else {
+                alert('User not found. Please register first.');
+                return;
+            }
             showSection(dashboardSection);
             setupDashboard();
             loadUserContent();
@@ -158,7 +176,7 @@ async function login(email, password) {
 async function register(name, email, password, role, institutionName = null) {
     try {
         const registerData = { name, email, password, role };
-        if (role === 'voter' && institutionName) {
+        if (institutionName) {
             registerData.institution = institutionName.trim();
         }
         
@@ -177,7 +195,12 @@ async function register(name, email, password, role, institutionName = null) {
         alert('Demo Mode: Registration simulated successfully!');
         authToken = 'demo-token';
         localStorage.setItem('token', authToken);
-        currentUser = { name, email, role };
+        currentUser = { name, email, role, institution: institutionName || 'Demo University' };
+        
+        // Store user in demo users list
+        demoUsers.push(currentUser);
+        localStorage.setItem('demoUsers', JSON.stringify(demoUsers));
+        
         showSection(dashboardSection);
         setupDashboard();
         loadUserContent();
@@ -209,14 +232,8 @@ async function loadVoterElection() {
         const data = await apiRequest('/elections');
         renderElections(data.data || []);
     } catch (error) {
-        const demoElections = [{
-            _id: 'demo-1',
-            name: 'Student Government Elections 2024',
-            description: 'Annual student government elections',
-            startDate: new Date(),
-            endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-        }];
-        renderElections(demoElections);
+        const userElections = demoElections.filter(e => e.institution === currentUser?.institution);
+        renderElections(userElections);
     }
 }
 
@@ -232,8 +249,8 @@ function renderElections(elections) {
         div.innerHTML = `
             <h3>${election.name}</h3>
             <p>${election.description || 'No description'}</p>
-            <p>Start: ${new Date(election.startDate).toLocaleDateString()}</p>
-            <p>End: ${new Date(election.endDate).toLocaleDateString()}</p>
+            <p>Start: ${new Date(election.startDate).toLocaleString()}</p>
+            <p>End: ${new Date(election.endDate).toLocaleString()}</p>
             <button onclick="showCandidatesAndVote('${election._id}')">View Candidates & Vote</button>
         `;
         electionsList.appendChild(div);
@@ -409,6 +426,24 @@ async function loadAllResults() {
     }
 }
 
+// Start real-time results updates
+function startRealTimeResults() {
+    if (resultsInterval) clearInterval(resultsInterval);
+    resultsInterval = setInterval(() => {
+        if (document.getElementById('results-section').classList.contains('active')) {
+            loadAllResults();
+        }
+    }, 5000); // Update every 5 seconds
+}
+
+// Stop real-time results updates
+function stopRealTimeResults() {
+    if (resultsInterval) {
+        clearInterval(resultsInterval);
+        resultsInterval = null;
+    }
+}
+
 // Render results
 function renderResults(allResults) {
     const resultsList = document.getElementById('results-list');
@@ -460,13 +495,30 @@ async function handleCreateElection(e) {
     const endDate = document.getElementById('election-end').value;
     
     try {
-        await apiRequest('/elections', {
-            method: 'POST',
-            body: JSON.stringify({ name, description, startDate, endDate })
-        });
-        alert('Election created successfully!');
+        // In demo mode, create election locally
+        if (DEMO_MODE) {
+            const newElection = {
+                _id: Date.now().toString(),
+                name,
+                description,
+                startDate,
+                endDate,
+                createdBy: currentUser.email,
+                institution: currentUser.institution
+            };
+            demoElections.push(newElection);
+            localStorage.setItem('demoElections', JSON.stringify(demoElections));
+            alert('Election created successfully!');
+        } else {
+            await apiRequest('/elections', {
+                method: 'POST',
+                body: JSON.stringify({ name, description, startDate, endDate })
+            });
+            alert('Election created successfully!');
+        }
         hideAdminForms();
         document.getElementById('election-form').reset();
+        loadUserContent();
     } catch (error) {
         alert('Failed to create election: ' + error.message);
     }
@@ -478,7 +530,9 @@ async function loadElectionsForUpdate() {
         const select = document.getElementById('update-election-select');
         select.innerHTML = '<option value="">Select Election to Update</option>';
         
-        (data.data || []).forEach(election => {
+        // Only show elections created by current admin
+        const adminElections = (data.data || []).filter(e => e.createdBy === currentUser?.email);
+        adminElections.forEach(election => {
             const option = document.createElement('option');
             option.value = election._id;
             option.textContent = election.name;
@@ -502,8 +556,8 @@ async function loadElectionForUpdate() {
         
         document.getElementById('update-election-name').value = election.name;
         document.getElementById('update-election-description').value = election.description;
-        document.getElementById('update-election-start').value = election.startDate.split('T')[0];
-        document.getElementById('update-election-end').value = election.endDate.split('T')[0];
+        document.getElementById('update-election-start').value = election.startDate.slice(0, 16);
+        document.getElementById('update-election-end').value = election.endDate.slice(0, 16);
         document.getElementById('update-form').style.display = 'block';
     } catch (error) {
         alert('Failed to load election details: ' + error.message);
@@ -536,7 +590,9 @@ async function loadCandidatesForDelete() {
         const select = document.getElementById('delete-candidate-select');
         select.innerHTML = '<option value="">Select Candidate to Delete</option>';
         
-        (data.data || []).forEach(candidate => {
+        // Only show candidates from admin's institution
+        const institutionCandidates = (data.data || []).filter(c => c.institution === currentUser?.institution);
+        institutionCandidates.forEach(candidate => {
             const option = document.createElement('option');
             option.value = candidate._id;
             option.textContent = `${candidate.name} - ${candidate.position}`;
@@ -568,6 +624,35 @@ async function handleDeleteCandidate() {
     } catch (error) {
         alert('Failed to delete candidate: ' + error.message);
     }
+}
+
+// Load users from admin's institution
+function loadInstitutionUsers() {
+    const usersList = document.getElementById('users-list');
+    if (!usersList) return;
+    
+    const institutionUsers = demoUsers.filter(u => u.institution === currentUser?.institution);
+    
+    if (institutionUsers.length === 0) {
+        usersList.innerHTML = '<p>No users found from your institution.</p>';
+        return;
+    }
+    
+    usersList.innerHTML = '';
+    institutionUsers.forEach(user => {
+        const userDiv = document.createElement('div');
+        userDiv.style.cssText = 'padding: 12px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;';
+        userDiv.innerHTML = `
+            <div>
+                <strong>${sanitizeHTML(user.name)}</strong><br>
+                <small>${sanitizeHTML(user.email)} - ${sanitizeHTML(user.role)}</small>
+            </div>
+            <span style="padding: 4px 8px; background: ${user.role === 'admin' ? '#f56565' : '#48bb78'}; color: white; border-radius: 4px; font-size: 0.8rem;">
+                ${sanitizeHTML(user.role.toUpperCase())}
+            </span>
+        `;
+        usersList.appendChild(userDiv);
+    });
 }
 
 // Load elections for candidate form
@@ -656,7 +741,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const role = document.getElementById('register-role').value;
             const institutionName = document.getElementById('register-election').value;
             
-            if (role === 'voter' && !institutionName.trim()) {
+            if (!institutionName.trim()) {
                 alert('Please enter your institution name.');
                 return;
             }
@@ -803,6 +888,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (currentUser && currentUser.role === 'admin') {
                 showSection(resultsSection);
                 loadAllResults();
+                startRealTimeResults();
             } else {
                 alert('Results are only available to administrators.');
             }
@@ -852,6 +938,16 @@ document.addEventListener('DOMContentLoaded', () => {
         viewAllVotesBtn.addEventListener('click', () => {
             showSection(resultsSection);
             loadAllResults();
+            startRealTimeResults();
+        });
+    }
+    
+    // View users button
+    const viewUsersBtn = document.getElementById('view-users-btn');
+    if (viewUsersBtn) {
+        viewUsersBtn.addEventListener('click', () => {
+            loadInstitutionUsers();
+            showAdminForm('view-users-form');
         });
     }
     
@@ -932,6 +1028,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('cancel-create-election')?.addEventListener('click', () => hideAdminForms());
     document.getElementById('cancel-update-election')?.addEventListener('click', () => hideAdminForms());
     document.getElementById('cancel-delete-candidate')?.addEventListener('click', () => hideAdminForms());
+    document.getElementById('cancel-view-users')?.addEventListener('click', () => hideAdminForms());
     
     // Initialize EmailJS
     emailjs.init('tEeYLrGXlE5t7uGmE');
@@ -974,7 +1071,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (authToken) {
         // In demo mode, restore user session
         if (DEMO_MODE) {
-            currentUser = { name: 'Demo User', email: 'demo@example.com', role: 'voter' };
+            currentUser = { name: 'Demo User', email: 'demo@example.com', role: 'voter', institution: 'Demo University' };
         }
         showSection(homeSection);
     } else {
